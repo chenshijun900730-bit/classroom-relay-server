@@ -233,6 +233,34 @@
             gap: 5px;
             cursor: pointer;
         }
+
+        .voice-mode {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 10px;
+            font-size: 14px;
+            color: #666;
+        }
+
+        .voice-mode select {
+            font-size: 14px;
+            padding: 8px 10px;
+        }
+
+        .tts-status {
+            font-size: 12px;
+            color: #999;
+            margin-top: 5px;
+        }
+
+        .tts-status.ok {
+            color: #28a745;
+        }
+
+        .tts-status.err {
+            color: #dc3545;
+        }
         
         @media (max-width: 600px) {
             .container {
@@ -272,10 +300,37 @@
                 <button id="connectBtn" onclick="connect()">进入房间</button>
             </div>
             
-            <div class="input-group">
-                <select id="voiceSelect">
-                    <option value="">选择播报声音...</option>
+            <div class="voice-mode">
+                <label>语音引擎：</label>
+                <select id="ttsMode" onchange="onTtsModeChange()">
+                    <option value="aliyun">☁️ 阿里云 TTS（推荐）</option>
+                    <option value="browser">💻 浏览器内置语音</option>
                 </select>
+            </div>
+
+            <div id="aliyunVoiceSection">
+                <div class="input-group">
+                    <select id="aliyunVoiceSelect">
+                        <option value="xiaoyun">小云 - 女声（默认）</option>
+                        <option value="xiaogang">小刚 - 男声</option>
+                        <option value="ruoxi">若兮 - 女声温柔</option>
+                        <option value="siyue">思悦 - 女声活泼</option>
+                        <option value="sijia">思佳 - 女声知性</option>
+                        <option value="aiqi">艾琪 - 女声童声</option>
+                        <option value="aida">艾达 - 女声英语</option>
+                        <option value="aicheng">艾诚 - 男声英语</option>
+                        <option value="aibao">艾宝 - 童声</option>
+                    </select>
+                </div>
+                <div id="ttsStatus" class="tts-status">检测中...</div>
+            </div>
+
+            <div id="browserVoiceSection" class="hidden">
+                <div class="input-group">
+                    <select id="voiceSelect">
+                        <option value="">选择播报声音...</option>
+                    </select>
+                </div>
             </div>
         </div>
         
@@ -328,16 +383,61 @@
         let students = [];
         let history = [];
         let isConnected = false;
+        let currentAudio = null; // 当前播放的音频对象
+        let ttsAvailable = false; // 阿里云 TTS 是否可用
+
+        // ============================================
+        // 语音引擎切换
+        // ============================================
+        function onTtsModeChange() {
+            const mode = document.getElementById('ttsMode').value;
+            document.getElementById('aliyunVoiceSection').classList.toggle('hidden', mode !== 'aliyun');
+            document.getElementById('browserVoiceSection').classList.toggle('hidden', mode !== 'browser');
+        }
+
+        // 检测阿里云 TTS 是否可用
+        async function checkTtsAvailable() {
+            const statusEl = document.getElementById('ttsStatus');
+            try {
+                const response = await fetch('/api/tts?text=' + encodeURIComponent('测试'));
+                if (response.ok) {
+                    const contentType = response.headers.get('Content-Type');
+                    if (contentType && contentType.includes('audio')) {
+                        ttsAvailable = true;
+                        statusEl.textContent = '✅ 阿里云 TTS 已就绪';
+                        statusEl.className = 'tts-status ok';
+                        return;
+                    }
+                }
+                const errData = await response.json();
+                if (errData.error && errData.error.includes('未配置')) {
+                    ttsAvailable = false;
+                    statusEl.textContent = '⚠️ 阿里云 TTS 未配置（将回退到浏览器语音）';
+                    statusEl.className = 'tts-status err';
+                } else {
+                    ttsAvailable = false;
+                    statusEl.textContent = '❌ TTS 错误: ' + (errData.error || '未知错误');
+                    statusEl.className = 'tts-status err';
+                }
+            } catch (e) {
+                ttsAvailable = false;
+                statusEl.textContent = '⚠️ TTS 检测失败，将使用浏览器语音';
+                statusEl.className = 'tts-status err';
+            }
+        }
+
+        // 页面加载时检测
+        checkTtsAvailable();
         
-        // 初始化语音选择
+        // ============================================
+        // 初始化浏览器语音选择（备用方案）
+        // ============================================
         function initVoiceSelect() {
             const voiceSelect = document.getElementById('voiceSelect');
             const voices = window.speechSynthesis.getVoices();
             
-            // 清空选项
             voiceSelect.innerHTML = '<option value="">选择播报声音...</option>';
             
-            // 添加所有可用声音
             voices.forEach((voice, index) => {
                 const option = document.createElement('option');
                 option.value = index;
@@ -349,12 +449,14 @@
             });
         }
         
-        // 等待语音加载
         if (window.speechSynthesis) {
             window.speechSynthesis.onvoiceschanged = initVoiceSelect;
             initVoiceSelect();
         }
         
+        // ============================================
+        // WebSocket 连接
+        // ============================================
         function connect() {
             const roomInput = document.getElementById('roomInput').value.trim();
             const clientType = document.querySelector('input[name="clientType"]:checked').value;
@@ -366,7 +468,6 @@
             
             room = roomInput;
             
-            // 确定 WebSocket URL
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const wsUrl = `${protocol}//${window.location.host}`;
             
@@ -376,19 +477,16 @@
                 isConnected = true;
                 updateStatus('已连接 - 房间: ' + room, 'connected');
                 
-                // 发送加入房间消息
                 ws.send(JSON.stringify({
                     type: 'join',
                     room: room,
                     clientType: clientType
                 }));
                 
-                // 显示主界面
                 document.getElementById('loginSection').classList.add('hidden');
                 document.getElementById('mainSection').classList.remove('hidden');
                 document.getElementById('status').classList.remove('hidden');
                 
-                // 如果是教室端，隐藏编辑功能
                 if (clientType === 'classroom') {
                     document.querySelector('.student-list button').style.display = 'none';
                     document.getElementById('studentInput').style.display = 'none';
@@ -449,12 +547,14 @@
             status.className = 'status ' + type;
         }
         
+        // ============================================
+        // 学生名单管理
+        // ============================================
         function saveStudents() {
             const input = document.getElementById('studentInput').value;
             students = input.split('\n').map(s => s.trim()).filter(s => s);
             displayStudents();
             
-            // 发送给学生列表到房间
             if (ws && isConnected) {
                 ws.send(JSON.stringify({
                     type: 'student_list',
@@ -468,6 +568,9 @@
             display.innerHTML = students.map(s => `<span class="student-tag">${s}</span>`).join('');
         }
         
+        // ============================================
+        // 点名与广播
+        // ============================================
         function randomCall() {
             if (students.length === 0) {
                 alert('请先添加学生名单');
@@ -519,7 +622,46 @@
             addToHistory('广播: ' + message);
         }
         
+        // ============================================
+        // 语音播报（核心函数）
+        // 优先使用阿里云 TTS，失败时回退到浏览器语音
+        // ============================================
         function speak(text) {
+            const mode = document.getElementById('ttsMode').value;
+            
+            if (mode === 'aliyun') {
+                speakWithAliyun(text);
+            } else {
+                speakWithBrowser(text);
+            }
+        }
+
+        // 阿里云 TTS 播报
+        function speakWithAliyun(text) {
+            // 停止当前播放
+            if (currentAudio) {
+                currentAudio.pause();
+                currentAudio = null;
+            }
+
+            const voice = document.getElementById('aliyunVoiceSelect').value;
+            const audioUrl = `/api/tts?text=${encodeURIComponent(text)}&voice=${encodeURIComponent(voice)}`;
+            
+            currentAudio = new Audio(audioUrl);
+            currentAudio.onended = () => { currentAudio = null; };
+            currentAudio.onerror = (e) => {
+                console.error('阿里云 TTS 播放失败，回退到浏览器语音:', e);
+                currentAudio = null;
+                speakWithBrowser(text);
+            };
+            currentAudio.play().catch(e => {
+                console.error('音频播放被阻止，回退到浏览器语音:', e);
+                speakWithBrowser(text);
+            });
+        }
+
+        // 浏览器内置语音播报（备用）
+        function speakWithBrowser(text) {
             if (!window.speechSynthesis) {
                 console.log('Speech synthesis not supported');
                 return;
@@ -532,7 +674,6 @@
             utterance.rate = 0.9;
             utterance.pitch = 1;
             
-            // 使用选择的声音
             const voiceSelect = document.getElementById('voiceSelect');
             const voices = window.speechSynthesis.getVoices();
             if (voiceSelect.value && voices[voiceSelect.value]) {
@@ -542,6 +683,9 @@
             window.speechSynthesis.speak(utterance);
         }
         
+        // ============================================
+        // 历史记录
+        // ============================================
         function addToHistory(text) {
             const time = new Date().toLocaleTimeString('zh-CN');
             history.unshift({ text, time });
