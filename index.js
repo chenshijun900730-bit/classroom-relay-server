@@ -4,15 +4,12 @@ const fs = require('fs');
 const path = require('path');
 const url = require('url');
 const WebSocket = require('ws');
+const crypto = require('crypto');
 
 const PORT = process.env.PORT || 10000;
 
 // ============================================
 // 阿里云 TTS 配置
-// 请在 Render 环境变量中设置以下值：
-//   ALIYUN_ACCESS_KEY_ID     - 阿里云 AccessKey ID
-//   ALIYUN_ACCESS_KEY_SECRET - 阿里云 AccessKey Secret
-//   ALIYUN_TTS_APPKEY        - 智能语音交互项目的 AppKey
 // ============================================
 const ALIYUN_ACCESS_KEY_ID = process.env.ALIYUN_ACCESS_KEY_ID || '';
 const ALIYUN_ACCESS_KEY_SECRET = process.env.ALIYUN_ACCESS_KEY_SECRET || '';
@@ -31,11 +28,23 @@ const mimeTypes = {
 };
 
 // ============================================
+// RFC 3986 编码（阿里云要求）
+// ============================================
+function percentEncode(str) {
+  return encodeURIComponent(str)
+    .replace(/!/g, '%21')
+    .replace(/'/g, '%27')
+    .replace(/\(/g, '%28')
+    .replace(/\)/g, '%29')
+    .replace(/\*/g, '%2A')
+    .replace(/%20/g, '+');
+}
+
+// ============================================
 // 阿里云 TTS Token 获取
 // ============================================
 function getTtsToken() {
   return new Promise((resolve, reject) => {
-    // 如果 token 还有效，直接返回
     if (ttsToken && Date.now() < ttsTokenExpireTime) {
       return resolve(ttsToken);
     }
@@ -44,16 +53,14 @@ function getTtsToken() {
       return reject(new Error('阿里云 AccessKey 未配置'));
     }
 
-    const crypto = require('crypto');
-    
-    // 生成规范化的 Timestamp (UTC)
+    // 生成 Timestamp (UTC ISO8601)
     const now = new Date();
     const timestamp = now.toISOString().replace(/\.\d{3}Z$/, 'Z');
     
     // 生成 SignatureNonce
     const signatureNonce = Date.now().toString() + Math.random().toString(36).substr(2, 6);
     
-    // 构建参数（未编码）
+    // 构建参数
     const params = {
       AccessKeyId: ALIYUN_ACCESS_KEY_ID,
       Action: 'CreateToken',
@@ -69,22 +76,22 @@ function getTtsToken() {
     // 按 key 排序
     const sortedKeys = Object.keys(params).sort();
     
-    // 构建规范化查询字符串（RFC 3986 编码）
+    // 构建规范化查询字符串
     const canonicalQuery = sortedKeys.map(k => {
-      return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]);
+      return percentEncode(k) + '=' + percentEncode(params[k]);
     }).join('&');
 
     // 构造签名字符串
-    const stringToSign = 'GET&' + encodeURIComponent('/') + '&' + encodeURIComponent(canonicalQuery);
+    const stringToSign = 'GET&' + percentEncode('/') + '&' + percentEncode(canonicalQuery);
 
-    // HMAC-SHA1 签名（AccessKeySecret + '&'）
+    // HMAC-SHA1 签名
     const signature = crypto.createHmac('sha1', ALIYUN_ACCESS_KEY_SECRET + '&')
       .update(stringToSign).digest('base64');
 
-    // 构建最终 URL（添加 Signature）
+    // 构建最终 URL
     const finalParams = { ...params, Signature: signature };
     const finalQuery = Object.keys(finalParams).sort().map(k => {
-      return encodeURIComponent(k) + '=' + encodeURIComponent(finalParams[k]);
+      return percentEncode(k) + '=' + percentEncode(finalParams[k]);
     }).join('&');
     
     const tokenUrl = 'https://nls-meta.cn-shanghai.aliyuncs.com/?' + finalQuery;
@@ -97,9 +104,8 @@ function getTtsToken() {
           const result = JSON.parse(data);
           if (result.Token) {
             ttsToken = result.Token.Id;
-            // Token 有效期通常为 24 小时，提前 1 小时刷新
             ttsTokenExpireTime = Date.now() + (result.Token.ExpireTime - 3600) * 1000;
-            console.log('TTS Token 获取成功，有效期至:', new Date(ttsTokenExpireTime).toLocaleString());
+            console.log('TTS Token 获取成功');
             resolve(ttsToken);
           } else {
             reject(new Error('获取 Token 失败: ' + JSON.stringify(result)));
@@ -120,7 +126,7 @@ function synthesizeSpeech(text, voice = 'xiaoyun') {
     try {
       const token = await getTtsToken();
 
-      const ttsParams = new URLSearchParams({
+      const ttsParams = {
         appkey: ALIYUN_TTS_APPKEY,
         token: token,
         text: text,
@@ -130,21 +136,24 @@ function synthesizeSpeech(text, voice = 'xiaoyun') {
         volume: '50',
         speech_rate: '0',
         pitch_rate: '0'
-      });
+      };
 
-      const ttsUrl = `https://nls-gateway-cn-shanghai.aliyuncs.com/stream/v1/tts?${ttsParams.toString()}`;
+      // 构建查询字符串
+      const queryString = Object.keys(ttsParams).map(k => {
+        return percentEncode(k) + '=' + percentEncode(ttsParams[k]);
+      }).join('&');
+
+      const ttsUrl = 'https://nls-gateway-cn-shanghai.aliyuncs.com/stream/v1/tts?' + queryString;
 
       https.get(ttsUrl, (res) => {
         const contentType = res.headers['content-type'];
         if (contentType && contentType.includes('audio')) {
-          // 成功 - 返回音频数据
           const chunks = [];
           res.on('data', chunk => chunks.push(chunk));
           res.on('end', () => {
             resolve(Buffer.concat(chunks));
           });
         } else {
-          // 失败
           let errMsg = '';
           res.on('data', chunk => errMsg += chunk);
           res.on('end', () => {
@@ -176,12 +185,12 @@ const server = http.createServer(async (req, res) => {
 
     if (!ALIYUN_ACCESS_KEY_ID || !ALIYUN_ACCESS_KEY_SECRET || !ALIYUN_TTS_APPKEY) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: '阿里云 TTS 未配置，请在 Render 环境变量中设置 ALIYUN_ACCESS_KEY_ID、ALIYUN_ACCESS_KEY_SECRET、ALIYUN_TTS_APPKEY' }));
+      res.end(JSON.stringify({ error: '阿里云 TTS 未配置' }));
       return;
     }
 
     try {
-      console.log('TTS 请求:', text.substring(0, 30) + (text.length > 30 ? '...' : ''));
+      console.log('TTS 请求:', text.substring(0, 30));
       const audioBuffer = await synthesizeSpeech(text, voice);
       res.writeHead(200, {
         'Content-Type': 'audio/mpeg',
@@ -247,14 +256,12 @@ wss.on('connection', (ws) => {
           }
           rooms.get(currentRoom).add(ws);
 
-          // 通知房间内其他客户端
           broadcast(currentRoom, {
             type: 'user_joined',
             clientType: clientType,
             timestamp: Date.now()
           }, ws);
 
-          // 发送确认
           ws.send(JSON.stringify({
             type: 'joined',
             room: currentRoom,
@@ -321,8 +328,8 @@ function broadcast(room, message, excludeWs = null) {
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   if (ALIYUN_ACCESS_KEY_ID && ALIYUN_ACCESS_KEY_SECRET && ALIYUN_TTS_APPKEY) {
-    console.log('阿里云 TTS 已配置 ✓');
+    console.log('阿里云 TTS 已配置');
   } else {
-    console.log('阿里云 TTS 未配置，将使用浏览器内置语音（请设置环境变量 ALIYUN_ACCESS_KEY_ID、ALIYUN_ACCESS_KEY_SECRET、ALIYUN_TTS_APPKEY）');
+    console.log('阿里云 TTS 未配置，将使用浏览器内置语音');
   }
 });
