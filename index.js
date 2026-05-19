@@ -91,6 +91,19 @@ function getTtsToken() {
     const signature = crypto.createHmac('sha1', ALIYUN_ACCESS_KEY_SECRET + '&')
       .update(stringToSign).digest('base64');
 
+    // 调试日志
+    console.log('=== 阿里云签名调试 ===');
+    console.log('Timestamp:', timestamp);
+    console.log('SignatureNonce:', signatureNonce);
+    console.log('CanonicalQuery:', canonicalQuery);
+    console.log('StringToSign:', stringToSign);
+    console.log('Signature:', signature);
+    console.log('AccessKeyId (前4位):', ALIYUN_ACCESS_KEY_ID.substring(0, 4));
+    console.log('AccessKeySecret 长度:', ALIYUN_ACCESS_KEY_SECRET.length);
+    console.log('AccessKeySecret 首尾字符:', ALIYUN_ACCESS_KEY_SECRET.charAt(0) + '...' + ALIYUN_ACCESS_KEY_SECRET.charAt(ALIYUN_ACCESS_KEY_SECRET.length-1));
+    console.log('AccessKeySecret MD5:', crypto.createHash('md5').update(ALIYUN_ACCESS_KEY_SECRET).digest('hex').substring(0, 8));
+    console.log('====================');
+
     // 构建最终 URL（添加 Signature 参数）
     const finalParams = { ...params, Signature: signature };
     const finalQuery = Object.keys(finalParams).sort().map(k => {
@@ -111,7 +124,9 @@ function getTtsToken() {
             console.log('TTS Token 获取成功');
             resolve(ttsToken);
           } else {
-            reject(new Error('获取 Token 失败: ' + JSON.stringify(result)));
+            const errMsg = JSON.stringify(result);
+            console.error('TTS Token 响应错误 (完整):', errMsg);
+            reject(new Error('获取 Token 失败: ' + errMsg));
           }
         } catch (e) {
           reject(new Error('解析 Token 响应失败: ' + e.message));
