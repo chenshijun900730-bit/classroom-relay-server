@@ -31,6 +31,7 @@ const mimeTypes = {
 // RFC 3986 编码（阿里云要求）
 // ============================================
 function percentEncode(str) {
+  if (!str) return '';
   return encodeURIComponent(str)
     .replace(/!/g, '%21')
     .replace(/'/g, '%27')
@@ -60,7 +61,7 @@ function getTtsToken() {
     // 生成 SignatureNonce
     const signatureNonce = Date.now().toString() + Math.random().toString(36).substr(2, 6);
     
-    // 构建参数
+    // 构建参数（不包含 Signature）
     const params = {
       AccessKeyId: ALIYUN_ACCESS_KEY_ID,
       Action: 'CreateToken',
@@ -76,19 +77,19 @@ function getTtsToken() {
     // 按 key 排序
     const sortedKeys = Object.keys(params).sort();
     
-    // 构建规范化查询字符串
+    // 构建规范化查询字符串（key=value 形式，key 和 value 都要编码）
     const canonicalQuery = sortedKeys.map(k => {
       return percentEncode(k) + '=' + percentEncode(params[k]);
     }).join('&');
 
-    // 构造签名字符串
-    const stringToSign = 'GET&' + percentEncode('/') + '&' + percentEncode(canonicalQuery);
+    // 构造签名字符串：HTTPMethod + "&" + percentEncode("/") + "&" + percentEncode(CanonicalQueryString)
+    const stringToSign = 'GET&%2F&' + percentEncode(canonicalQuery);
 
-    // HMAC-SHA1 签名
+    // HMAC-SHA1 签名，key 是 AccessKeySecret + "&"
     const signature = crypto.createHmac('sha1', ALIYUN_ACCESS_KEY_SECRET + '&')
       .update(stringToSign).digest('base64');
 
-    // 构建最终 URL
+    // 构建最终 URL（添加 Signature 参数）
     const finalParams = { ...params, Signature: signature };
     const finalQuery = Object.keys(finalParams).sort().map(k => {
       return percentEncode(k) + '=' + percentEncode(finalParams[k]);
