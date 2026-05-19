@@ -1,0 +1,15 @@
+{
+  "name": "classroom-relay-server",
+  "version": "1.0.0",
+  "description": "班级叫号服务 - WebSocket 中继服务器",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "ws": "^8.14.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
