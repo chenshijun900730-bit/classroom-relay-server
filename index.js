@@ -44,34 +44,50 @@ function getTtsToken() {
       return reject(new Error('阿里云 AccessKey 未配置'));
     }
 
-    // 使用 POP API 获取 Token
-    const params = new URLSearchParams({
+    const crypto = require('crypto');
+    
+    // 生成规范化的 Timestamp (UTC)
+    const now = new Date();
+    const timestamp = now.toISOString().replace(/\.\d{3}Z$/, 'Z');
+    
+    // 生成 SignatureNonce
+    const signatureNonce = Date.now().toString() + Math.random().toString(36).substr(2, 6);
+    
+    // 构建参数（未编码）
+    const params = {
       AccessKeyId: ALIYUN_ACCESS_KEY_ID,
       Action: 'CreateToken',
       Format: 'JSON',
       RegionId: 'cn-shanghai',
       SignatureMethod: 'HMAC-SHA1',
-      SignatureNonce: Date.now().toString() + Math.random().toString(36).substr(2),
+      SignatureNonce: signatureNonce,
       SignatureVersion: '1.0',
-      Timestamp: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+      Timestamp: timestamp,
       Version: '2019-02-28'
-    });
+    };
 
     // 按 key 排序
-    const sortedKeys = Array.from(params.keys()).sort();
-    const canonicalQuery = sortedKeys.map(k => `${encodeURIComponent(k)}=${encodeURIComponent(params.get(k))}`).join('&');
+    const sortedKeys = Object.keys(params).sort();
+    
+    // 构建规范化查询字符串（RFC 3986 编码）
+    const canonicalQuery = sortedKeys.map(k => {
+      return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]);
+    }).join('&');
 
     // 构造签名字符串
-    const stringToSign = `GET&${encodeURIComponent('/')}&${encodeURIComponent(canonicalQuery)}`;
+    const stringToSign = 'GET&' + encodeURIComponent('/') + '&' + encodeURIComponent(canonicalQuery);
 
-    // HMAC-SHA1 签名
-    const crypto = require('crypto');
+    // HMAC-SHA1 签名（AccessKeySecret + '&'）
     const signature = crypto.createHmac('sha1', ALIYUN_ACCESS_KEY_SECRET + '&')
       .update(stringToSign).digest('base64');
 
-    params.append('Signature', signature);
-
-    const tokenUrl = `https://nls-meta.cn-shanghai.aliyuncs.com/?${params.toString()}`;
+    // 构建最终 URL（添加 Signature）
+    const finalParams = { ...params, Signature: signature };
+    const finalQuery = Object.keys(finalParams).sort().map(k => {
+      return encodeURIComponent(k) + '=' + encodeURIComponent(finalParams[k]);
+    }).join('&');
+    
+    const tokenUrl = 'https://nls-meta.cn-shanghai.aliyuncs.com/?' + finalQuery;
 
     https.get(tokenUrl, (res) => {
       let data = '';
